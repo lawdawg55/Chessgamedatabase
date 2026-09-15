@@ -1,3 +1,12 @@
+# ==================== CONFIGURATION ====================
+import os
+
+CHESS_COM_USER = os.getenv("CHESS_COM_USER", "your_fallback_username")
+LICHESS_USER = os.getenv("LICHESS_USER", "your_fallback_username")
+EMAIL = os.getenv("CONTACT_EMAIL", "your_email@example.com")
+DATABASE_URL = os.getenv("DATABASE_URL") 
+# =======================================================
+
 name: Daily Chess Game Sync
 
 on:
@@ -21,8 +30,8 @@ jobs:
 
     - name: Install dependencies
       run: |
-        python -m pip install -r requirements.txt
-        
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
 
     - name: Run synchronization script
       env:
@@ -31,4 +40,3 @@ jobs:
         CONTACT_EMAIL: ${{ secrets.CONTACT_EMAIL }}
         DATABASE_URL: ${{ secrets.DATABASE_URL }}
       run: python chess_harvest.py
-
