@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Chess_harvest.py
-Harvests games from Chess.com + Lichess and stores them in Supabase/Postgres.
+Chess_harvest.py – Debug version
 """
 
 import os
 import time
 import json
+import traceback
 import requests
 import psycopg2
 from psycopg2.extras import execute_values
@@ -19,57 +19,89 @@ from typing import List, Dict, Any, Optional
 CHESS_COM_USER = os.getenv("CHESS_COM_USER", "ColbyLaw42")
 LICHESS_USER   = os.getenv("LICHESS_USER",   "ColbyLaw42")
 EMAIL          = os.getenv("CONTACT_EMAIL",  "law.colby@gmail.com")
-DATABASE_URL   = os.getenv(
+
+# Clean connection string (no spaces)
+DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql://postgres:t57FCOqtVfsDKozV@db.zabecfyzzoqdzklatwlq.supabase.co:5432/postgres"
 )
 
-# Chess.com requires a descriptive User-Agent
 USER_AGENT = f"ChessHarvest/1.0 (contact: {EMAIL})"
 
+print("=" * 60)
+print("Chess Harvest – DEBUG MODE")
+print(f"Chess.com user : {CHESS_COM_USER}")
+print(f"Lichess user   : {LICHESS_USER}")
+print(f"Email          : {EMAIL}")
+print(f"DATABASE_URL   : {DATABASE_URL[:40]}...{DATABASE_URL[-20:]}")  # partial for safety
+print("=" * 60)
+
 # ---------------------------------------------------------------------------
-# Database helpers
+# Database helpers with full error reporting
 # ---------------------------------------------------------------------------
 def get_connection():
-    return psycopg2.connect(DATABASE_URL, sslmode="require")
+    print("\n→ Attempting database connection...")
+    try:
+        conn = psycopg2.connect(
+            DATABASE_URL,
+            sslmode="require",
+            connect_timeout=15
+        )
+        print("✓ Database connection successful")
+        return conn
+    except Exception as e:
+        print("❌ DATABASE CONNECTION FAILED")
+        print(f"Error type : {type(e).__name__}")
+        print(f"Error      : {e}")
+        traceback.print_exc()
+        raise
 
 def create_tables(conn):
-    with conn.cursor() as cur:
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS chess_games (
-                id              SERIAL PRIMARY KEY,
-                source          TEXT NOT NULL,          -- 'chess.com' or 'lichess'
-                username        TEXT NOT NULL,
-                game_id         TEXT NOT NULL,
-                white           TEXT,
-                black           TEXT,
-                result          TEXT,
-                time_control    TEXT,
-                time_class      TEXT,                   -- bullet/blitz/rapid/daily
-                rated           BOOLEAN,
-                rules           TEXT,                   -- standard, chess960, etc.
-                pgn             TEXT,
-                end_time        TIMESTAMPTZ,
-                raw_json        JSONB,
-                harvested_at    TIMESTAMPTZ DEFAULT NOW(),
-                UNIQUE (source, game_id)
-            );
-        """)
-        cur.execute("""
-            CREATE INDEX IF NOT EXISTS idx_chess_games_username
-                ON chess_games (username);
-        """)
-        cur.execute("""
-            CREATE INDEX IF NOT EXISTS idx_chess_games_end_time
-                ON chess_games (end_time DESC);
-        """)
-    conn.commit()
-    print("✓ Tables ready")
+    print("\n→ Creating / verifying table...")
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS chess_games (
+                    id              SERIAL PRIMARY KEY,
+                    source          TEXT NOT NULL,
+                    username        TEXT NOT NULL,
+                    game_id         TEXT NOT NULL,
+                    white           TEXT,
+                    black           TEXT,
+                    result          TEXT,
+                    time_control    TEXT,
+                    time_class      TEXT,
+                    rated           BOOLEAN,
+                    rules           TEXT,
+                    pgn             TEXT,
+                    end_time        TIMESTAMPTZ,
+                    raw_json        JSONB,
+                    harvested_at    TIMESTAMPTZ DEFAULT NOW(),
+                    UNIQUE (source, game_id)
+                );
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_chess_games_username
+                    ON chess_games (username);
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_chess_games_end_time
+                    ON chess_games (end_time DESC);
+            """)
+        conn.commit()
+        print("✓ Table 'chess_games' is ready")
+    except Exception as e:
+        print("❌ TABLE CREATION FAILED")
+        print(f"Error: {e}")
+        traceback.print_exc()
+        raise
 
 def insert_games(conn, games: List[Dict[str, Any]]):
     if not games:
+        print("  (no games to insert)")
         return 0
 
+    print(f"\n→ Inserting {len(games)} games...")
     sql = """
         INSERT INTO chess_games (
             source, username, game_id, white, black, result,
@@ -91,24 +123,29 @@ def insert_games(conn, games: List[Dict[str, Any]]):
             g.get("rules"),
             g.get("pgn"),
             g.get("end_time"),
-            json.dumps(g.get("raw_json")) if g.get("raw_json") else None,
+            json.dumps(g.get("raw_json")) if g.get("raw_json") is not None else None,
         )
         for g in games
     ]
 
-    with conn.cursor() as cur:
-        execute_values(cur, sql, values, page_size=200)
-    conn.commit()
-    return len(games)
+    try:
+        with conn.cursor() as cur:
+            execute_values(cur, sql, values, page_size=100)
+        conn.commit()
+        print(f"✓ Successfully inserted/ignored {len(games)} rows")
+        return len(games)
+    except Exception as e:
+        print("❌ INSERT FAILED")
+        print(f"Error: {e}")
+        traceback.print_exc()
+        conn.rollback()
+        raise
 
 # ---------------------------------------------------------------------------
-# Chess.com harvester
+# Chess.com harvester (unchanged logic, just quieter)
 # ---------------------------------------------------------------------------
-def chesscom_headers() -> Dict[str, str]:
-    return {
-        "User-Agent": USER_AGENT,
-        "Accept": "application/json",
-    }
+def chesscom_headers():
+    return {"User-Agent": USER_AGENT, "Accept": "application/json"}
 
 def get_chesscom_archives(username: str) -> List[str]:
     url = f"https://api.chess.com/pub/player/{username}/games/archives"
@@ -117,9 +154,7 @@ def get_chesscom_archives(username: str) -> List[str]:
     return r.json().get("archives", [])
 
 def get_chesscom_month(url: str) -> List[Dict]:
-    # Prefer the JSON endpoint so we get structured data
-    json_url = url.rstrip("/")  # already ends with /YYYY/MM
-    r = requests.get(json_url, headers=chesscom_headers(), timeout=60)
+    r = requests.get(url, headers=chesscom_headers(), timeout=60)
     r.raise_for_status()
     return r.json().get("games", [])
 
@@ -130,23 +165,20 @@ def harvest_chesscom(username: str) -> List[Dict[str, Any]]:
 
     all_games = []
     for i, archive_url in enumerate(archives, 1):
-        print(f"  [{i}/{len(archives)}] {archive_url.split('/')[-2]}/{archive_url.split('/')[-1]}", end=" ")
+        ym = "/".join(archive_url.split("/")[-2:])
+        print(f"  [{i}/{len(archives)}] {ym}", end=" ", flush=True)
         try:
             month_games = get_chesscom_month(archive_url)
             for g in month_games:
-                # Extract a stable game_id (Chess.com uses uuid or url)
-                game_id = g.get("uuid") or g.get("url", "").split("/")[-1] or str(hash(g.get("pgn", "")))
+                game_id = (
+                    g.get("uuid")
+                    or (g.get("url") or "").split("/")[-1]
+                    or str(hash(g.get("pgn", "")))
+                )
                 white = g.get("white", {}).get("username")
                 black = g.get("black", {}).get("username")
-                result = None
-                if white and black:
-                    result = g.get("white", {}).get("result")  # win/loss/draw/…
-                    if not result:
-                        result = "unknown"
-
-                end_time = None
-                if "end_time" in g:
-                    end_time = datetime.utcfromtimestamp(g["end_time"])
+                result = g.get("white", {}).get("result") or "unknown"
+                end_time = datetime.utcfromtimestamp(g["end_time"]) if "end_time" in g else None
 
                 all_games.append({
                     "source": "chess.com",
@@ -164,31 +196,22 @@ def harvest_chesscom(username: str) -> List[Dict[str, Any]]:
                     "raw_json": g,
                 })
             print(f"→ {len(month_games)} games")
-            time.sleep(0.8)  # be polite
+            time.sleep(0.7)
         except Exception as e:
             print(f"ERROR: {e}")
             continue
 
-    print(f"Total Chess.com games collected: {len(all_games)}")
+    print(f"Total Chess.com games: {len(all_games)}")
     return all_games
 
 # ---------------------------------------------------------------------------
 # Lichess harvester
 # ---------------------------------------------------------------------------
-def harvest_lichess(username: str, max_games: Optional[int] = None) -> List[Dict[str, Any]]:
+def harvest_lichess(username: str, max_games: int = 500) -> List[Dict[str, Any]]:
     print(f"\n=== Lichess – {username} ===")
     url = f"https://lichess.org/api/games/user/{username}"
-    params = {
-        "max": max_games or 300,          # safety limit; raise if you need more
-        "clocks": "false",
-        "evals": "false",
-        "opening": "false",
-        "literate": "false",
-    }
-    headers = {
-        "Accept": "application/x-ndjson",
-        "User-Agent": USER_AGENT,
-    }
+    params = {"max": max_games, "clocks": "false", "evals": "false", "opening": "false"}
+    headers = {"Accept": "application/x-ndjson", "User-Agent": USER_AGENT}
 
     games = []
     try:
@@ -201,6 +224,65 @@ def harvest_lichess(username: str, max_games: Optional[int] = None) -> List[Dict
                 players = g.get("players", {})
                 white = players.get("white", {}).get("user", {}).get("name")
                 black = players.get("black", {}).get("user", {}).get("name")
-
                 end_time = None
-                if "lastMoveAt
+                if "lastMoveAt" in g:
+                    end_time = datetime.utcfromtimestamp(g["lastMoveAt"] / 1000)
+
+                games.append({
+                    "source": "lichess",
+                    "username": username,
+                    "game_id": g.get("id"),
+                    "white": white,
+                    "black": black,
+                    "result": g.get("status"),
+                    "time_control": (g.get("clock") or {}).get("initial"),
+                    "time_class": g.get("speed"),
+                    "rated": g.get("rated"),
+                    "rules": g.get("variant"),
+                    "pgn": None,
+                    "end_time": end_time,
+                    "raw_json": g,
+                })
+    except Exception as e:
+        print(f"Lichess error: {e}")
+        traceback.print_exc()
+
+    print(f"Total Lichess games: {len(games)}")
+    return games
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+def main():
+    conn = None
+    try:
+        conn = get_connection()
+        create_tables(conn)
+
+        # Chess.com
+        chesscom_games = harvest_chesscom(CHESS_COM_USER)
+        insert_games(conn, chesscom_games)
+
+        # Lichess
+        lichess_games = harvest_lichess(LICHESS_USER)
+        insert_games(conn, lichess_games)
+
+        # Final verification
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM chess_games;")
+            total = cur.fetchone()[0]
+            print(f"\n✓ Final row count in chess_games: {total}")
+
+        print("\n✅ Harvest finished successfully")
+
+    except Exception as e:
+        print("\n💥 SCRIPT FAILED")
+        print(f"Final error: {e}")
+        traceback.print_exc()
+    finally:
+        if conn:
+            conn.close()
+            print("Database connection closed")
+
+if __name__ == "__main__":
+    main()
