@@ -16,8 +16,8 @@ from typing import List, Dict, Any, Optional
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-CHESS_COM_USER = os.getenv("CHESS_COM_USER", "your_fallback_username")
-LICHESS_USER   = os.getenv("LICHESS_USER",   "your_fallback_username")
+CHESS_COM_USER = os.getenv("CHESS_COM_USER", "ColbyLaw42")
+LICHESS_USER   = os.getenv("LICHESS_USER",   "ColbyLaw42")
 EMAIL          = os.getenv("CONTACT_EMAIL",  "law.colby@gmail.com")
 DATABASE_URL   = os.getenv(
     "DATABASE_URL",
@@ -203,56 +203,4 @@ def harvest_lichess(username: str, max_games: Optional[int] = None) -> List[Dict
                 black = players.get("black", {}).get("user", {}).get("name")
 
                 end_time = None
-                if "lastMoveAt" in g:
-                    end_time = datetime.utcfromtimestamp(g["lastMoveAt"] / 1000)
-
-                games.append({
-                    "source": "lichess",
-                    "username": username,
-                    "game_id": g.get("id"),
-                    "white": white,
-                    "black": black,
-                    "result": g.get("status"),          # mate, resign, draw, etc.
-                    "time_control": g.get("clock", {}).get("initial") if g.get("clock") else None,
-                    "time_class": g.get("speed"),        # bullet, blitz, rapid, classical
-                    "rated": g.get("rated"),
-                    "rules": g.get("variant"),
-                    "pgn": None,                        # we asked for ndjson; can request PGN separately
-                    "end_time": end_time,
-                    "raw_json": g,
-                })
-    except Exception as e:
-        print(f"Lichess error: {e}")
-
-    print(f"Total Lichess games collected: {len(games)}")
-    return games
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-def main():
-    print("Chess Harvest starting…")
-    print(f"Chess.com user : {CHESS_COM_USER}")
-    print(f"Lichess user   : {LICHESS_USER}")
-    print(f"Contact email  : {EMAIL}")
-
-    conn = get_connection()
-    try:
-        create_tables(conn)
-
-        # Chess.com
-        chesscom_games = harvest_chesscom(CHESS_COM_USER)
-        inserted = insert_games(conn, chesscom_games)
-        print(f"Inserted {inserted} new Chess.com games")
-
-        # Lichess
-        lichess_games = harvest_lichess(LICHESS_USER)
-        inserted = insert_games(conn, lichess_games)
-        print(f"Inserted {inserted} new Lichess games")
-
-        print("\n✓ Harvest complete")
-    finally:
-        conn.close()
-
-if __name__ == "__main__":
-    main()
+                if "lastMoveAt
